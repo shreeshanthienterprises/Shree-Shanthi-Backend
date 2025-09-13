@@ -30,7 +30,7 @@ EMAIL_PASS=<app-password-from-gmail>
 OWNER_EMAIL=varshithreddy3777@gmail.com
 
 # Frontend URLs
-FRONTEND_URL=https://www.afcofficial.in,http://localhost:3000
+FRONTEND_URL=https:..FRONT_END_URL
 ```
 
 
