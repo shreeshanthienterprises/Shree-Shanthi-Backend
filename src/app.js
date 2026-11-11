@@ -6,8 +6,20 @@ const { loggingMiddleware } = require('./middleware/logging');
 const { globalErrorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const { corsOptions } = require('./config/cors');
 const routes = require('./routes');
+const { healthPayload } = require('./utils/buildInfo');
 
 const app = express();
+
+// Render sits behind one proxy: trust it so req.ip is the real client IP
+// (required by express-rate-limit; must be set before the rate limiter).
+app.set('trust proxy', 1);
+
+// Request id + safe logging first, so every response gets an id
+app.use(loggingMiddleware);
+
+// Health check for Render - registered before the rate limiter so frequent
+// health probes are never throttled.
+app.get('/health', (req, res) => res.json(healthPayload()));
 
 // Security middleware
 app.use(helmet({
@@ -39,9 +51,6 @@ app.use(express.urlencoded({
 
 // CORS configuration
 app.use(cors(corsOptions));
-
-// Logging middleware
-app.use(loggingMiddleware);
 
 // Routes
 app.use('/api', routes);

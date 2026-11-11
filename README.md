@@ -1,75 +1,45 @@
-
 # Shree Shanthi Enterprises Backend API
 
-Production-ready Node.js backend API for Shree Shanthi Enterprises website.
+Node.js/Express backend for the Shree Shanthi Enterprises website. Its main job is the contact form: `POST /api/contact` emails the team through [Resend](https://resend.com) over HTTPS.
 
-## Features
+> **Why Resend and not SMTP?** Render's free tier blocks outbound SMTP ports (25/465/587), so Gmail SMTP always times out there. Resend uses its HTTPS API (port 443), which works.
 
-- 📝 Contact form submission with email notifications
-- 🔒 Security (Helmet, CORS, Rate limiting)
-- 📧 Gmail SMTP integration with retry mechanism
-- 🛡️ Input sanitization and validation
-- 🚀 Optimized for production deployment
+## Environment variables
 
+| Variable | Required | Description |
+| --- | --- | --- |
+| `RESEND_API_KEY` | yes | API key from Resend (`re_...`). Use a "Sending access" key. |
+| `EMAIL_FROM` | yes | Sender on a Resend-verified domain, e.g. `Shree Shanthi Enterprises <contact@shreeshanthienterprises.com>` |
+| `EMAIL_TO` | no | Recipient(s), comma-separated. Default `shreeshanthienterprises@gmail.com` |
+| `FRONTEND_URL` | no | Comma-separated allowed CORS origins |
+| `NODE_ENV` | no | `production` on Render |
+| `PORT` | no | Set automatically by Render |
 
-## Quick Deployment (Render)
+See `.env.example`. Never commit a real `.env`.
 
-### 1. Environment Variables Setup
+## Render setup
 
-**Important:** Set these in your Render dashboard (NOT in code):
+1. New **Web Service** from this GitHub repo. Build command `npm install`, start command `node server.js`.
+2. Add the environment variables above in **Environment**.
+3. **Settings → Health Check Path:** `/health`.
+4. Deploy, then test:
+   ```bash
+   curl https://<your-service>.onrender.com/health
+   ```
 
-```env
-NODE_ENV=production
-PORT=3005
+## Resend setup
 
-# Email Configuration
-EMAIL_HOST=smtp.gmail.com
-EMAIL_PORT=587
-EMAIL_USER=varshithreddy3777@gmail.com
-EMAIL_PASS=<app-password-from-gmail>
-OWNER_EMAIL=varshithreddy3777@gmail.com
+1. Create a Resend account and add the domain `shreeshanthienterprises.com` under **Domains**.
+2. Add the DNS records Resend shows (SPF, DKIM, and the optional DMARC record) at your DNS provider, then click **Verify**.
+3. Create an API key and put it in `RESEND_API_KEY`.
+4. Until the domain is verified, Resend only lets you send from `onboarding@resend.dev` to your own Resend account email.
 
-# Frontend URLs
-FRONTEND_URL=https:..FRONT_END_URL
-```
+## API
 
+### `GET /health`
+Returns `{"status":"ok"}`. (`/api/health` also works.)
 
-### 2. Gmail Setup Requirements
-
-The `EMAIL_USER` account must have:
-- ✅ Two-factor authentication (2FA) enabled
-- ✅ App password generated (16-character password from Gmail)
-- ✅ App password used in `EMAIL_PASS` (not regular password)
-
-
-### 3. How to Generate Gmail App Password
-
-1. Go to your Gmail account settings
-2. Security → 2-Step Verification → App passwords
-3. Select "Mail" and generate password
-4. Copy the 16-character password to `EMAIL_PASS`
-
-
-### 4. Deploy to Render
-
-1. Connect your GitHub repository
-2. Set environment variables in Render dashboard
-3. Deploy and test using the endpoints below
-
-
-## API Endpoints
-
-### Health Check
-```
-GET /api/health
-```
-
-### Contact Form
-```
-POST /api/contact
-```
-
-Payload:
+### `POST /api/contact`
 ```json
 {
   "name": "John Doe",
@@ -78,74 +48,39 @@ Payload:
   "message": "I am interested in your services."
 }
 ```
+`service` must be one of `Housekeeping services`, `Security services`, `Pest control`.
 
-### Test Endpoints (For Debugging)
-```
-GET /api/test-email/check-env    - Check environment setup
-POST /api/test-email/send-test   - Send test email
-```
+| Status | Body |
+| --- | --- |
+| 200 | `{"success":true,"message":"..."}` |
+| 400 | `{"success":false,"message":"..."}` validation error |
+| 429 | Rate limit: 5 submissions per 15 minutes per IP |
+| 502 | Email provider failed after retries / 15s timeout |
+| 500 | Server misconfigured (missing `RESEND_API_KEY` / `EMAIL_FROM`) |
 
+The email has the customer's address as `reply_to`, so replying from Gmail goes straight to the customer. The send has one 15-second overall deadline and up to 2 retries (only for network errors, 429 and 5xx), with an idempotency key so a retry cannot deliver a duplicate.
 
-## Contact Form Flow
+## Logging
 
-1. **User fills form** → Frontend sends data to backend
-2. **Backend processes** → Sanitizes and validates input
-3. **Email sent** → FROM varshithreddy3777@gmail.com TO varshithreddy3777@gmail.com
-4. **Shree Shanthi Enterprises receives notification** → Professional email with user details
-5. **Manual follow-up** → Team contacts user for service info
-
-
-## Security Features
-
-- **Helmet**: Security headers
-- **CORS**: Cross-origin resource sharing protection
-- **Rate Limiting**: 100 requests per 15 minutes per IP
-- **Input Sanitization**: XSS protection
-- **Validation**: Email and input validation
-
+Logs contain a request id, method/path/status, service type, and success/failure with the provider's error message. Request bodies, names, emails and IP addresses are never logged.
 
 ## Development
 
-For local development:
 ```bash
-# Install dependencies
 npm install
-
-# Copy environment template
-cp .env.example .env
-
-# Edit .env with your values
-# Start development server
+cp .env.example .env   # fill in values
 npm run dev
+npm test
 ```
 
-
-## Production Optimizations
-
-- Reduced logging in production
-- Optimized CORS origins
-- Connection pooling for email
-- Graceful shutdown handling
-- Error handling without exposing internals
-
-
-## Troubleshooting
-
-If emails aren't working:
-1. Check Render logs for detailed errors
-2. Verify Gmail app password is correct
-3. Ensure 2FA is enabled on Gmail
-4. Test using `/api/test-email/send-test` endpoint
-
-
-## File Structure
+## Structure
 
 ```
 src/
-├── config/          # Email and CORS configuration
-├── controllers/     # Request handlers
-├── middleware/      # Security and logging
-├── routes/          # API routes
-├── services/        # Email service
-└── utils/           # Sanitization utilities
+├── config/        # CORS
+├── controllers/   # Request handlers
+├── middleware/    # Logging, rate limiting, validation, errors
+├── routes/        # API routes
+├── services/      # emailService.js - the only file that knows about Resend
+└── utils/         # Input normalisation
 ```

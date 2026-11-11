@@ -1,122 +1,196 @@
-const { transporter } = require('../config/email');
+const { Resend } = require('resend');
 
-class EmailService {
-  static async sendContactEmail(sanitizedData, clientIP) {
-      console.log('=== EMAIL SERVICE STARTING ===');
-      console.log('From:', process.env.EMAIL_USER);
-      console.log('To:', process.env.OWNER_EMAIL);
-      console.log('Subject: New Contact Form Message');
+// Provider-specific code lives in this file only. To swap providers, replace
+// `sendOnce` (and the client setup) and keep the public `sendContactEmail` API.
 
-      const mailOptions = {
-        from: {
-          name: 'Shree Shanthi Enterprises',
-          address: process.env.EMAIL_USER
-        },
-        to: process.env.OWNER_EMAIL,
-        replyTo: {
-          name: sanitizedData.name,
-          address: sanitizedData.email
-        },
-        subject: `New Contact Form Message from ${sanitizedData.name} [${sanitizedData.service}]`,
-        html: this.generateEmailHTML(sanitizedData, clientIP),
-        text: this.generateEmailText(sanitizedData, clientIP)
-      };
+const DEFAULT_EMAIL_TO = 'shreeshanthienterprises@gmail.com';
+const OVERALL_TIMEOUT_MS = 15000; // hard cap for the whole send, retries included
+const MAX_RETRIES = 2; // retries after the first attempt (3 attempts total)
+const BACKOFF_MS = [500, 1000];
 
-    // Send email with timeout and retry mechanism
-    const emailPromise = this.sendWithRetry(mailOptions, 3);
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Email timeout after 30 seconds')), 30000)
-    );
-
-    return Promise.race([emailPromise, timeout]);
-  }
-
-  static async sendWithRetry(mailOptions, maxRetries) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        console.log(`Attempting to send email (attempt ${attempt}/${maxRetries})...`);
-        const result = await transporter.sendMail(mailOptions);
-        console.log(`✓ Email sent successfully on attempt ${attempt}`);
-        console.log('Email result:', result.messageId);
-        return result;
-      } catch (error) {
-        console.error(`✗ Email send attempt ${attempt} failed:`, error.message);
-        console.error('Error code:', error.code);
-        console.error('Error response:', error.response);
-        
-        if (attempt === maxRetries) {
-          console.error('=== ALL EMAIL ATTEMPTS FAILED ===');
-          throw new Error(`Email failed after ${maxRetries} attempts: ${error.message}`);
-        }
-        
-        // Wait before retry (exponential backoff)
-        const waitTime = 2000 * attempt; // 2s, 4s, 6s
-        console.log(`Waiting ${waitTime}ms before retry...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-    }
-  }
-
-  static generateEmailHTML(data, clientIP) {
-    return `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #f9f9f9; border-radius: 8px; overflow: hidden;">
-        <div style="background: #e53935; color: #fff; padding: 24px 32px; text-align: center;">
-          <h2 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 1px;">Shree Shanthi Enterprises</h2>
-          <p style="margin: 8px 0 0; font-size: 18px; font-weight: 400;">New Contact Form Submission</p>
-        </div>
-        <div style="background: #fff; padding: 32px;">
-          <h3 style="color: #1a237e; margin-top: 0;">Contact Details</h3>
-          <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
-            <tr>
-              <td style="color: #888; font-weight: bold; padding: 8px 0;">Name:</td>
-              <td style="padding: 8px 0;">${data.name}</td>
-            </tr>
-            <tr>
-              <td style="color: #888; font-weight: bold; padding: 8px 0;">Email:</td>
-              <td style="padding: 8px 0;">${data.email}</td>
-            </tr>
-            <tr>
-              <td style="color: #888; font-weight: bold; padding: 8px 0;">Service:</td>
-              <td style="padding: 8px 0;">${data.service}</td>
-            </tr>
-            <tr>
-              <td style="color: #888; font-weight: bold; padding: 8px 0;">Received:</td>
-              <td style="padding: 8px 0;">${new Date().toLocaleString()}</td>
-            </tr>
-          </table>
-          <h3 style="color: #e53935; margin-bottom: 8px;">Message</h3>
-          <div style="background: #f4f8ff; border-radius: 4px; padding: 16px; color: #333; font-size: 15px; line-height: 1.6;">
-            ${data.message.replace(/\n/g, '<br>')}
-          </div>
-        </div>
-        <div style="background: #1a237e; color: #fff; padding: 16px 32px; text-align: center; font-size: 13px;">
-          Housekeeping • Security • Pest Control<br>
-          This message was sent via the contact form on Shree Shanthi Enterprises website.
-        </div>
-      </div>
-    `;
-  }
-
-  static generateEmailText(data, clientIP) {
-  return `
-SHREE SHANTHI ENTERPRISES - SERVICE REQUEST
-============================================
-NAME: ${data.name}
-EMAIL: ${data.email}
-SERVICE: ${data.service}
-DATE: ${new Date().toLocaleString()}
-
-MESSAGE:
---------
-${data.message}
-
-============================================
-Housekeeping • Security • Pest Control
-
-This message was sent via the contact form on Shree Shanthi Enterprises website.
-Please respond to the customer within 24 hours.
-`;
+class EmailError extends Error {
+  constructor(message, { retryable = false, code } = {}) {
+    super(message);
+    this.name = 'EmailError';
+    this.retryable = retryable;
+    this.code = code;
   }
 }
 
-module.exports = EmailService;
+let client;
+function getClient() {
+  if (!process.env.RESEND_API_KEY) {
+    throw new EmailError('RESEND_API_KEY is not configured', { code: 'not_configured' });
+  }
+  if (!client) client = new Resend(process.env.RESEND_API_KEY);
+  return client;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatTimestamp(date = new Date()) {
+  return `${date.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+    hour12: true,
+  })} IST`;
+}
+
+function singleLine(value) {
+  return String(value).replace(/[\r\n]+/g, ' ').trim();
+}
+
+function generateEmailHTML(data, submittedAt) {
+  const row = (label, value) => `
+            <tr>
+              <td style="color:#888;font-weight:bold;padding:8px 12px 8px 0;vertical-align:top;white-space:nowrap;">${label}</td>
+              <td style="padding:8px 0;">${value}</td>
+            </tr>`;
+  const email = escapeHtml(data.email);
+  return `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f9f9f9;border-radius:8px;overflow:hidden;">
+        <div style="background:#e53935;color:#fff;padding:24px 32px;text-align:center;">
+          <h2 style="margin:0;font-size:26px;font-weight:700;">Shree Shanthi Enterprises</h2>
+          <p style="margin:8px 0 0;font-size:16px;">New Contact Form Submission</p>
+        </div>
+        <div style="background:#fff;padding:32px;">
+          <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+            ${row('Name', escapeHtml(data.name))}
+            ${row('Email', `<a href="mailto:${email}">${email}</a>`)}
+            ${row('Service', escapeHtml(data.service))}
+            ${row('Received', escapeHtml(submittedAt))}
+          </table>
+          <h3 style="color:#e53935;margin:0 0 8px;">Message</h3>
+          <div style="background:#f4f8ff;border-radius:4px;padding:16px;color:#333;font-size:15px;line-height:1.6;">
+            ${escapeHtml(data.message).replace(/\r?\n/g, '<br>')}
+          </div>
+          <p style="color:#888;font-size:13px;margin:24px 0 0;">Reply to this email to respond directly to the customer.</p>
+        </div>
+        <div style="background:#1a237e;color:#fff;padding:16px 32px;text-align:center;font-size:13px;">
+          Housekeeping &bull; Security &bull; Pest Control
+        </div>
+      </div>`;
+}
+
+function generateEmailText(data, submittedAt) {
+  return [
+    'SHREE SHANTHI ENTERPRISES - NEW CONTACT FORM SUBMISSION',
+    '========================================================',
+    `Name:     ${data.name}`,
+    `Email:    ${data.email}`,
+    `Service:  ${data.service}`,
+    `Received: ${submittedAt}`,
+    '',
+    'Message:',
+    '--------',
+    data.message,
+    '',
+    'Reply to this email to respond directly to the customer.',
+  ].join('\n');
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+// Resolve/reject with `promise`, but reject immediately if `signal` aborts.
+function raceAbort(promise, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+function isRetryableStatus(status) {
+  return status === undefined || status === null || status === 408 || status === 429 || status >= 500;
+}
+
+// One attempt against the provider. Throws EmailError on failure.
+async function sendOnce(payload, idempotencyKey) {
+  let result;
+  try {
+    result = await getClient().emails.send(payload, { idempotencyKey });
+  } catch (err) {
+    if (err instanceof EmailError) throw err;
+    // Network-level failure (DNS, reset, etc.)
+    throw new EmailError(err.message || 'Network error', { retryable: true, code: err.code });
+  }
+  if (result && result.error) {
+    const { statusCode, message, name } = result.error;
+    throw new EmailError(message || name || 'Email provider error', {
+      retryable: isRetryableStatus(statusCode),
+      code: name || statusCode,
+    });
+  }
+  return { id: result && result.data && result.data.id };
+}
+
+/**
+ * Send the contact-form notification email.
+ * Resolves with { id } on success; rejects with EmailError after the retries
+ * are exhausted or the overall timeout fires. When it settles, no further
+ * provider calls are started.
+ */
+async function sendContactEmail(data, { requestId } = {}) {
+  const from = process.env.EMAIL_FROM;
+  if (!from) throw new EmailError('EMAIL_FROM is not configured', { code: 'not_configured' });
+  const to = (process.env.EMAIL_TO || DEFAULT_EMAIL_TO).split(',').map((s) => s.trim()).filter(Boolean);
+
+  const submittedAt = formatTimestamp();
+  const payload = {
+    from,
+    to,
+    replyTo: data.email,
+    subject: `New enquiry from ${singleLine(data.name)} [${singleLine(data.service)}]`,
+    html: generateEmailHTML(data, submittedAt),
+    text: generateEmailText(data, submittedAt),
+  };
+  // Same key across retries so a retried send can never deliver a duplicate.
+  const idempotencyKey = `contact-${requestId || Date.now()}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new EmailError(`Email send timed out after ${OVERALL_TIMEOUT_MS / 1000}s`, { code: 'timeout' })),
+    OVERALL_TIMEOUT_MS
+  );
+  const { signal } = controller;
+
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await raceAbort(sendOnce(payload, idempotencyKey), signal);
+      } catch (err) {
+        if (signal.aborted) throw signal.reason;
+        if (!(err instanceof EmailError) || !err.retryable || attempt >= MAX_RETRIES) throw err;
+        await sleep(BACKOFF_MS[attempt] || 1000, signal);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    // Make sure nothing keeps going after we settle (e.g. a pending backoff).
+    if (!signal.aborted) controller.abort(new EmailError('Email send finished', { code: 'finished' }));
+  }
+}
+
+module.exports = { sendContactEmail, EmailError, escapeHtml };

@@ -12,6 +12,13 @@ const validateContactForm = (req, res, next) => {
     });
   }
 
+  if ([name, email, service, message].some((v) => typeof v !== 'string')) {
+    return res.status(400).json({
+      success: false,
+      message: 'Name, email, service, and message are required.'
+    });
+  }
+
   // Validate field lengths
   if (name.length > 100) {
     return res.status(400).json({
