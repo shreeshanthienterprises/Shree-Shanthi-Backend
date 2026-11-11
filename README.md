@@ -9,7 +9,8 @@ Node.js/Express backend for the Shree Shanthi Enterprises website. Its main job 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `RESEND_API_KEY` | yes | API key from Resend (`re_...`). Use a "Sending access" key. |
-| `EMAIL_FROM` | yes | Sender on a Resend-verified domain, e.g. `Shree Shanthi Enterprises <contact@shreeshanthienterprises.com>` |
+| `EMAIL_FROM` | yes | Sender address on a Resend-verified domain, e.g. `contact@shreeshanthienterprises.com`. `Name <address>` also works, and a missing `<>` is repaired automatically. |
+| `EMAIL_FROM_NAME` | no | Display name, e.g. `Shree Shanthi Enterprises`. The code builds `Name <address>` for you. |
 | `EMAIL_TO` | no | Recipient(s), comma-separated. Default `shreeshanthienterprises@gmail.com` |
 | `FRONTEND_URL` | no | Comma-separated allowed CORS origins |
 | `NODE_ENV` | no | `production` on Render |
@@ -37,7 +38,7 @@ See `.env.example`. Never commit a real `.env`.
 ## API
 
 ### `GET /health`
-Returns `{"status":"ok"}`. (`/api/health` also works.)
+Returns `status`, `version` (deployed commit), `emailProvider` and `emailConfigured`. If email is not ready, `emailConfigured` is `false` and `emailConfigReason` says why (e.g. invalid `EMAIL_FROM`). The key is never returned. (`/api/health` also works.)
 
 ### `POST /api/contact`
 ```json

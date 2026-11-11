@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { Resend } = require('resend');
+const validator = require('validator');
 
 // Provider-specific code lives in this file only. To swap providers, replace
 // `sendOnce` (and the client setup) and keep the public `sendContactEmail` API.
@@ -17,6 +18,43 @@ class EmailError extends Error {
     this.code = code;
     this.status = status; // HTTP status from the provider, when known
   }
+}
+
+// ---- Sender ("from") handling -------------------------------------------
+// Resend requires exactly `email@domain` or `Name <email@domain>`. Env values are
+// often typed without the angle brackets (or with stray quotes/spaces), so we
+// parse EMAIL_FROM tolerantly and always rebuild a valid string.
+const EMAIL_RE = /[^\s<>"',;:()]+@[^\s<>"',;:()]+/;
+
+function cleanDisplayName(name) {
+  return String(name || '')
+    .replace(/[\x00-\x1F\x7F<>"',;:()@]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Returns { ok: true, from } or { ok: false, reason }. Never throws.
+function resolveFrom(env = process.env) {
+  const raw = String(env.EMAIL_FROM || '').trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!raw) return { ok: false, reason: 'EMAIL_FROM is not set' };
+
+  const match = raw.match(EMAIL_RE);
+  const address = match ? match[0] : '';
+  if (!address || !validator.isEmail(address)) {
+    return { ok: false, reason: 'EMAIL_FROM does not contain a valid email address' };
+  }
+
+  // EMAIL_FROM_NAME wins; otherwise use whatever text surrounded the address.
+  const name = cleanDisplayName(env.EMAIL_FROM_NAME) || cleanDisplayName(raw.replace(address, ' '));
+  return { ok: true, from: name ? `${name} <${address}>` : address };
+}
+
+// Used by /health and startup: is email ready to send, and if not, why?
+function getEmailConfigStatus(env = process.env) {
+  if (!String(env.RESEND_API_KEY || '').trim()) return { configured: false, reason: 'RESEND_API_KEY is not set' };
+  const from = resolveFrom(env);
+  if (!from.ok) return { configured: false, reason: from.reason };
+  return { configured: true };
 }
 
 let client;
@@ -158,8 +196,9 @@ async function sendOnce(payload, idempotencyKey) {
  * provider calls are started.
  */
 async function sendContactEmail(data) {
-  const from = process.env.EMAIL_FROM;
-  if (!from) throw new EmailError('EMAIL_FROM is not configured', { code: 'not_configured' });
+  const resolved = resolveFrom();
+  if (!resolved.ok) throw new EmailError(resolved.reason, { code: 'not_configured' });
+  const from = resolved.from;
   const to = (process.env.EMAIL_TO || DEFAULT_EMAIL_TO).split(',').map((s) => s.trim()).filter(Boolean);
 
   const submittedAt = formatTimestamp();
@@ -199,4 +238,4 @@ async function sendContactEmail(data) {
   }
 }
 
-module.exports = { sendContactEmail, EmailError, escapeHtml };
+module.exports = { sendContactEmail, EmailError, escapeHtml, resolveFrom, getEmailConfigStatus };

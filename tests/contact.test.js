@@ -135,3 +135,54 @@ describe('idempotency key', () => {
     expect(keys[2]).not.toBe(keys[0]); // submission 2 gets a new key
   });
 });
+
+describe('sender (from) handling', () => {
+  const { resolveFrom } = require('../src/services/emailService');
+  const BRACKETED = 'Shree Shanthi Enterprises <contact@shreeshanthienterprises.com>';
+  const savedFrom = process.env.EMAIL_FROM;
+  const savedName = process.env.EMAIL_FROM_NAME;
+  afterEach(() => {
+    process.env.EMAIL_FROM = savedFrom;
+    if (savedName === undefined) delete process.env.EMAIL_FROM_NAME; else process.env.EMAIL_FROM_NAME = savedName;
+  });
+
+  test.each([
+    ['name + address without brackets (the production bug)', 'Shree Shanthi Enterprises contact@shreeshanthienterprises.com', undefined, BRACKETED],
+    ['already valid Name <email>', BRACKETED, undefined, BRACKETED],
+    ['bare address', 'contact@shreeshanthienterprises.com', undefined, 'contact@shreeshanthienterprises.com'],
+    ['surrounding spaces and quotes', '  "contact@shreeshanthienterprises.com"  ', undefined, 'contact@shreeshanthienterprises.com'],
+    ['brackets but no name', '<contact@shreeshanthienterprises.com>', undefined, 'contact@shreeshanthienterprises.com'],
+    ['EMAIL_FROM_NAME builds the bracketed form', 'contact@shreeshanthienterprises.com', 'Shree Shanthi Enterprises', BRACKETED],
+    ['EMAIL_FROM_NAME overrides name in EMAIL_FROM', 'Old Name <contact@shreeshanthienterprises.com>', 'Shree Shanthi Enterprises', BRACKETED],
+    ['unsafe characters in the name are stripped', 'contact@shreeshanthienterprises.com', 'Evil <x@y.com>\r\nBcc: z', 'Evil x y.com Bcc z <contact@shreeshanthienterprises.com>'],
+  ])('%s', (_label, from, name, expected) => {
+    expect(resolveFrom({ EMAIL_FROM: from, EMAIL_FROM_NAME: name })).toEqual({ ok: true, from: expected });
+  });
+
+  test.each([['', 'EMAIL_FROM is not set'], ['not an email', 'EMAIL_FROM does not contain a valid email address']])(
+    'invalid EMAIL_FROM %j is rejected', (from, reason) => {
+      expect(resolveFrom({ EMAIL_FROM: from })).toEqual({ ok: false, reason });
+    });
+
+  test('a malformed EMAIL_FROM is repaired before it reaches Resend', async () => {
+    process.env.EMAIL_FROM = 'Shree Shanthi Enterprises contact@shreeshanthienterprises.com';
+    mockSend.mockResolvedValue({ data: { id: 'f1' }, error: null });
+    const res = await request(app).post('/api/contact').set('X-Forwarded-For', '10.7.0.1').send(valid);
+    expect(res.status).toBe(200);
+    expect(mockSend.mock.calls[0][0].from).toBe(BRACKETED);
+  });
+
+  test('/health reports emailConfigured:false with a reason when EMAIL_FROM is invalid', async () => {
+    process.env.EMAIL_FROM = 'garbage';
+    const res = await request(app).get('/health');
+    expect(res.body.emailConfigured).toBe(false);
+    expect(res.body.emailConfigReason).toBe('EMAIL_FROM does not contain a valid email address');
+  });
+
+  test('invalid EMAIL_FROM fails as 500 (misconfigured), not a provider call', async () => {
+    process.env.EMAIL_FROM = '';
+    const res = await request(app).post('/api/contact').set('X-Forwarded-For', '10.7.0.2').send(valid);
+    expect(res.status).toBe(500);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+});

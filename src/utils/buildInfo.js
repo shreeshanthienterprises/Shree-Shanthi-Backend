@@ -1,5 +1,6 @@
 const { execSync } = require('child_process');
 const pkg = require('../../package.json');
+const { getEmailConfigStatus } = require('../services/emailService');
 
 // Render exposes the deployed commit as RENDER_GIT_COMMIT. Locally fall back to
 // git, then to the package version.
@@ -16,11 +17,13 @@ const version = resolveVersion();
 
 // Never include the key itself - only whether it is set.
 function healthPayload() {
+  const email = getEmailConfigStatus();
   return {
     status: 'ok',
     version,
     emailProvider: 'resend',
-    emailConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+    emailConfigured: email.configured,
+    ...(email.configured ? {} : { emailConfigReason: email.reason })
   };
 }
 
