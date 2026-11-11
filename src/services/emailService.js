@@ -65,6 +65,7 @@ function generateEmailHTML(data, submittedAt) {
           <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
             ${row('Name', escapeHtml(data.name))}
             ${row('Email', `<a href="mailto:${email}">${email}</a>`)}
+            ${data.phone ? row('Phone', `<a href="tel:${escapeHtml(data.phone.replace(/[^\d+]/g, ''))}">${escapeHtml(data.phone)}</a>`) : ''}
             ${row('Service', escapeHtml(data.service))}
             ${row('Received', escapeHtml(submittedAt))}
           </table>
@@ -86,6 +87,7 @@ function generateEmailText(data, submittedAt) {
     '========================================================',
     `Name:     ${data.name}`,
     `Email:    ${data.email}`,
+    ...(data.phone ? [`Phone:    ${data.phone}`] : []),
     `Service:  ${data.service}`,
     `Received: ${submittedAt}`,
     '',

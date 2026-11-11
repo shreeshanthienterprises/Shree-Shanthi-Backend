@@ -44,11 +44,12 @@ Returns `{"status":"ok"}`. (`/api/health` also works.)
 {
   "name": "John Doe",
   "email": "john@example.com",
+  "phone": "+91 98765 43210",
   "service": "Housekeeping services",
   "message": "I am interested in your services."
 }
 ```
-`service` must be one of `Housekeeping services`, `Security services`, `Pest control`.
+`phone` is optional (7-15 digits; spaces, `+`, `-`, `()` allowed) and appears in the notification email when given. `service` must be one of `Housekeeping services`, `Security services`, `Pest control`.
 
 | Status | Body |
 | --- | --- |

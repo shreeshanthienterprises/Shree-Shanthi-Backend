@@ -41,6 +41,23 @@ const validateContactForm = (req, res, next) => {
     });
   }
 
+  // Validate phone (optional, so existing clients that don't send it keep working)
+  const { phone } = req.body;
+  if (phone !== undefined && phone !== null && phone !== '') {
+    const digits = typeof phone === 'string' ? phone.replace(/\D/g, '') : '';
+    if (
+      typeof phone !== 'string' ||
+      !/^\+?[\d\s\-().]{7,20}$/.test(phone.trim()) ||
+      digits.length < 7 ||
+      digits.length > 15
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid phone number.'
+      });
+    }
+  }
+
   // Validate service value
   const allowedServices = ['Housekeeping services', 'Security services', 'Pest control'];
   if (!allowedServices.includes(service)) {

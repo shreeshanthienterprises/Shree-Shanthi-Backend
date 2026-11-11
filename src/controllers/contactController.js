@@ -4,10 +4,11 @@ const { sanitizeInput } = require('../utils/sanitizer');
 class ContactController {
   // Input presence/format is validated by validateContactForm before this runs.
   static async submitContactForm(req, res) {
-    const { name, email, service, message } = req.body;
+    const { name, email, phone, service, message } = req.body;
     const data = {
       name: sanitizeInput(name),
       email: sanitizeInput(email),
+      phone: sanitizeInput(phone),
       service: sanitizeInput(service),
       message: sanitizeInput(message)
     };

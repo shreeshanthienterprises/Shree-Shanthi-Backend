@@ -16,6 +16,7 @@ const valid = {
   message: 'Need guards <b>urgently</b>',
 };
 
+let ip = 0; // distinct client IP per request so the 5/15min limiter doesn't interfere
 beforeEach(() => mockSend.mockReset());
 
 test('GET /health returns ok', async () => {
@@ -88,5 +89,30 @@ describe('CORS (production)', () => {
   test('no Origin still works', async () => {
     const res = await request(app).get('/api/health');
     expect(res.status).toBe(200);
+  });
+});
+
+describe('phone field', () => {
+  test('valid phone is included in the email (html + text)', async () => {
+    mockSend.mockResolvedValue({ data: { id: 'p1' }, error: null });
+    const res = await request(app).post('/api/contact').set('X-Forwarded-For', `10.9.0.${++ip}`).send({ ...valid, phone: '+91 98765 43210' });
+    expect(res.status).toBe(200);
+    const [payload] = mockSend.mock.calls[0];
+    expect(payload.text).toContain('Phone:    +91 98765 43210');
+    expect(payload.html).toContain('tel:+919876543210');
+  });
+
+  test('phone is optional', async () => {
+    mockSend.mockResolvedValue({ data: { id: 'p2' }, error: null });
+    const res = await request(app).post('/api/contact').set('X-Forwarded-For', `10.9.0.${++ip}`).send(valid);
+    expect(res.status).toBe(200);
+    expect(mockSend.mock.calls[0][0].text).not.toContain('Phone:');
+  });
+
+  test.each(['abc', '123', '<script>alert(1)</script>', '1'.repeat(30)])('invalid phone %s -> 400', async (phone) => {
+    const res = await request(app).post('/api/contact').set('X-Forwarded-For', `10.9.0.${++ip}`).send({ ...valid, phone });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('Invalid phone number.');
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });
