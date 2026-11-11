@@ -116,3 +116,22 @@ describe('phone field', () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 });
+
+describe('idempotency key', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const post = () => request(app).post('/api/contact').set('X-Forwarded-For', `10.8.0.${++ip}`).send(valid);
+
+  test('fresh random UUID per submission, reused across retries of the same one', async () => {
+    mockSend
+      .mockResolvedValueOnce({ data: null, error: { statusCode: 500, message: 'boom', name: 'internal' } })
+      .mockResolvedValueOnce({ data: { id: 'a' }, error: null })
+      .mockResolvedValueOnce({ data: { id: 'b' }, error: null });
+    await post();
+    await post();
+    const keys = mockSend.mock.calls.map((c) => c[1].idempotencyKey);
+    expect(keys).toHaveLength(3);
+    keys.forEach((k) => expect(k).toMatch(UUID));
+    expect(keys[0]).toBe(keys[1]); // retry of submission 1 reuses its key
+    expect(keys[2]).not.toBe(keys[0]); // submission 2 gets a new key
+  });
+});

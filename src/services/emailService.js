@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Resend } = require('resend');
 
 // Provider-specific code lives in this file only. To swap providers, replace
@@ -9,11 +10,12 @@ const MAX_RETRIES = 2; // retries after the first attempt (3 attempts total)
 const BACKOFF_MS = [500, 1000];
 
 class EmailError extends Error {
-  constructor(message, { retryable = false, code } = {}) {
+  constructor(message, { retryable = false, code, status } = {}) {
     super(message);
     this.name = 'EmailError';
     this.retryable = retryable;
     this.code = code;
+    this.status = status; // HTTP status from the provider, when known
   }
 }
 
@@ -143,6 +145,7 @@ async function sendOnce(payload, idempotencyKey) {
     throw new EmailError(message || name || 'Email provider error', {
       retryable: isRetryableStatus(statusCode),
       code: name || statusCode,
+      status: statusCode,
     });
   }
   return { id: result && result.data && result.data.id };
@@ -154,7 +157,7 @@ async function sendOnce(payload, idempotencyKey) {
  * are exhausted or the overall timeout fires. When it settles, no further
  * provider calls are started.
  */
-async function sendContactEmail(data, { requestId } = {}) {
+async function sendContactEmail(data) {
   const from = process.env.EMAIL_FROM;
   if (!from) throw new EmailError('EMAIL_FROM is not configured', { code: 'not_configured' });
   const to = (process.env.EMAIL_TO || DEFAULT_EMAIL_TO).split(',').map((s) => s.trim()).filter(Boolean);
@@ -169,7 +172,8 @@ async function sendContactEmail(data, { requestId } = {}) {
     text: generateEmailText(data, submittedAt),
   };
   // Same key across retries so a retried send can never deliver a duplicate.
-  const idempotencyKey = `contact-${requestId || Date.now()}`;
+  // A fresh random UUID per submission, reused only for retries of THIS submission.
+  const idempotencyKey = crypto.randomUUID();
 
   const controller = new AbortController();
   const timer = setTimeout(
